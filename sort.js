@@ -61,5 +61,4 @@ function quickSort(arr) {
   console.timeEnd('快速排序');
   return quickSort(left).concat([mid], quickSort(right));
 }
-
 console.log(quickSort(testArray));
