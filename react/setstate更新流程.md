@@ -61,11 +61,11 @@ const ReactNoopUpdateQueue = {
 this.setState({ state });
 // 等价
 ReactNoopUpdateQueue.enqueueSetState.bind(
-  this,
+  this, // 这里的this其实就是 `publicInstance`
   publicInstance,
-  partialState, // state
+  partialState, // 传入this.setState()内的需要更新的一部分state
   callback, // 如果有cb()
-  callerName
+  callerName // 指的是`setState, forceUpdate`
 );
 ```
 
@@ -94,11 +94,13 @@ function adoptClassInstance(workInProgress: Fiber, instance: any): void {
 
 const classComponentUpdater = {
   enqueueSetState(inst, payload, callback) {
-    const fiber = getInstance(inst);
     // 计算当前的fiber节点
-    const currentTime = requestCurrentTime();
+    const fiber = getInstance(inst);
     // 记录当前时间
+    const currentTime = requestCurrentTime();
+    // 计算
     const suspenseConfig = requestCurrentSuspenseConfig();
+    // 计算fiber节点的截止时间。说白了就是到时间了，就先不更新了，防止卡，当expirationTime为0时代表同步更新，直接更新
     const expirationTime = computeExpirationForFiber(
       currentTime,
       fiber,
@@ -108,19 +110,40 @@ const classComponentUpdater = {
     const update = createUpdate(expirationTime, suspenseConfig);
     // 此时，我们传入的this.setState({ state }) 就是这里的payload
     update.payload = payload;
+    // 配置好整个update对象
     if (callback !== undefined && callback !== null) {
       if (__DEV__) {
         warnOnInvalidCallback(callback, 'setState');
       }
       update.callback = callback;
     }
-    // 真正开始调用更新
+    // 已经配置好整个update对象，真正开始调用更新
     enqueueUpdate(fiber, update);
     // 记录当前fiber节点的更新时间
     scheduleWork(fiber, expirationTime);
   }
   //  ...省略了其他代码
 };
+
+function createUpdate(expirationTime: ExpirationTime): Update<*> {
+  return {
+    expirationTime: expirationTime,
+
+    tag: UpdateState,
+    payload: null, // 指的是this.setState(payload)的数据
+    callback: null, // this.setState(payload, cb)的回调
+
+    next: null,
+    nextEffect: null
+  };
+}
+
+function getInstance(key) {
+  // `key`就是当前的this实例，也就是说实际的Fiber对象React是不希望大家了解的
+  // 你也可以随便创建一个class组件，在render方法里面打印出this._reactInternalFiber
+  return key._reactInternalFiber;
+}
+// 打印出的this._reactInternalFiber，你会清晰的看到一个当前React节点的Fiber对象。所有的更新操作都在Fiber上完成
 ```
 
 3. 上面已经看到，实际配置好 fiber 对象和 updater 对象后，会真正调用 enqueueUpdate 方法进行更新，找到 enqueueUpdate 这个方法
@@ -136,7 +159,10 @@ export function enqueueUpdate<State>(fiber: Fiber, update: Update<State>) {
   // 整个判断就是为了计算当前的Fiber和和上一个Fiber节点的更新的queue给下一个if判断使用，
   // 目的就是为了判断queue1和queue2也就是当前Fiber和上一个计算的Fiber是否是一样的
   if (alternate === null) {
-    // 如果没有上一个Fiber节点，那么当前Fiber节点就是要入队列的Fiber节点，fiber.updateQueue默认就是null
+    // 如果没有上一个Fiber节点，那么当前Fiber节点就是要入队列的Fiber节点，fiber.updateQueue默认就是null，说白了就是这个节点还没有更新前的自己的信息，也可以理解为自己刚刚挂载，还没有进入过Queue的队列更新过
+    // fiber节点的updateQueue属性有什么？
+    // updateQueue对象有 baseState:当前的state
+    // baseQueue: 当前的更新队列，只要知道里面有this.setState(payload,cb)里的payload和cb就行了
     queue1 = fiber.updateQueue;
     queue2 = null;
     if (queue1 === null) {
@@ -257,6 +283,21 @@ function appendUpdateToQueue<State>(
     queue.lastUpdate.next = update;
     queue.lastUpdate = update;
   }
+}
+
+export function createUpdateQueue<State>(baseState: State): UpdateQueue<State> {
+  const queue: UpdateQueue<State> = {
+    baseState,
+    firstUpdate: null,
+    lastUpdate: null,
+    firstCapturedUpdate: null,
+    lastCapturedUpdate: null,
+    firstEffect: null,
+    lastEffect: null,
+    firstCapturedEffect: null,
+    lastCapturedEffect: null
+  };
+  return queue;
 }
 ```
 
